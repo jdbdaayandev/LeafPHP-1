@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace LeafPHP\Console;
 
 use LeafPHP\Database\DB;
-use LeafPHP\Database\Migration\MigrationInterface;
+use LeafPHP\Database\Migration\MigrationRunner;
 use Throwable;
 
 final class Kernel
@@ -21,10 +21,10 @@ final class Kernel
                 'make:migration' => $this->makeMigration($argv[2] ?? ''),
                 'make:session-migration', 'make:migration:sessions' => $this->makeSessionMigration(),
                 'make:seeder' => $this->makeSeeder($argv[2] ?? ''),
-                'migrate' => $this->migrate(),
-                'migrate:status' => $this->migrationStatus(),
-                'migrate:rollback' => $this->rollback((int)($argv[2] ?? 1)),
-                'migrate:reset' => $this->resetMigrations(),
+                'migrate' => $this->migrations()->run(),
+                'migrate:status' => $this->migrations()->status(),
+                'migrate:rollback' => $this->migrations()->rollback((int)($argv[2] ?? 1)),
+                'migrate:reset' => $this->migrations()->reset(),
                 'migrate:fresh' => $this->fresh(in_array('--seed', $argv, true)),
                 'db:seed' => $this->seed($argv[2] ?? null),
                 'key:generate' => $this->generateKey(),
@@ -53,14 +53,36 @@ final class Kernel
         if ($kind === 'model') $body = str_replace("namespace {$namespace};", "namespace {$namespace};\n\nuse App\\Models\\Model;", $body);
         file_put_contents($file, $body); echo "Created {$file}\n"; return 0;
     }
-    private function makeMigration(string $name): int {
-        $name = strtolower(trim($name)); $name = preg_replace('/[^a-z0-9_]+/', '_', $name);
-        if ($name === '') throw new \InvalidArgumentException('Provide a migration name.');
-        $dir = $this->basePath . '/database/migrations'; if (!is_dir($dir)) mkdir($dir, 0775, true);
-        $file = $dir . '/' . date('Y_m_d_His') . '_' . $name . '.php';
-        $table = preg_replace('/^(create_|add_)/', '', $name); $table = preg_replace('/_table$/', '', $table);
-        $body = "<?php\ndeclare(strict_types=1);\n\nuse LeafPHP\\Database\\Migration\\MigrationInterface;\nuse LeafPHP\\Database\\Schema\\Blueprint;\nuse LeafPHP\\Database\\Schema\\Schema;\n\nreturn new class implements MigrationInterface {\n    public function up(): void\n    {\n        Schema::create('{$table}', function (Blueprint \$table): void {\n            \$table->id();\n            \$table->timestamps();\n        });\n    }\n\n    public function down(): void\n    {\n        Schema::dropIfExists('{$table}');\n    }\n};\n";
-        file_put_contents($file, $body); echo "Created {$file}\n"; return 0;
+    private function makeMigration(string $name): int
+    {
+        $name = strtolower(trim($name));
+        $name = preg_replace('/[^a-z0-9_]+/', '_', $name) ?? '';
+        $name = trim(preg_replace('/_+/', '_', $name) ?? '', '_');
+        if ($name === '') throw new \InvalidArgumentException('Provide a migration name, e.g. create_books_table.');
+
+        $dir = $this->basePath . '/database/migrations';
+        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new \RuntimeException('Could not create the database/migrations directory.');
+        }
+
+        if (preg_match('/^create_([a-z][a-z0-9_]*)_table$/', $name, $matches)) {
+            $tableName = $matches[1];
+            $up = "        Schema::create('{$tableName}', function (Blueprint \$table): void {\n            \$table->id();\n            \$table->timestamps();\n        });";
+            $down = "        Schema::dropIfExists('{$tableName}');";
+        } else {
+            $up = '        // Add your schema changes here using Schema or DB.';
+            $down = '        // Reverse the schema changes made in up().';
+        }
+
+        $timestamp = date('Y_m_d_His');
+        $file = $dir . '/' . $timestamp . '_' . $name . '.php';
+        $suffix = 1;
+        while (is_file($file)) $file = $dir . '/' . $timestamp . '_' . $name . '_' . $suffix++ . '.php';
+
+        $body = "<?php\ndeclare(strict_types=1);\n\nuse LeafPHP\\Database\\Migration\\MigrationInterface;\nuse LeafPHP\\Database\\Schema\\Blueprint;\nuse LeafPHP\\Database\\Schema\\Schema;\n\nreturn new class implements MigrationInterface {\n    public function up(): void\n    {\n{$up}\n    }\n\n    public function down(): void\n    {\n{$down}\n    }\n};\n";
+        if (file_put_contents($file, $body) === false) throw new \RuntimeException('Could not write migration file.');
+        echo 'Created migration: ' . basename($file) . PHP_EOL;
+        return 0;
     }
 
     private function makeSessionMigration(): int {
@@ -105,43 +127,15 @@ PHP;
         $body = "<?php\ndeclare(strict_types=1);\n\nuse LeafPHP\\Database\\Seeder;\nuse LeafPHP\\Database\\DB;\n\nreturn new class extends Seeder {\n    public function run(): void\n    {\n        // Add repeatable seed data using DB::statement() or DB::table().\n    }\n};\n";
         file_put_contents($file, $body); echo "Created {$file}\n"; return 0;
     }
-    private function ensureMigrationsTable(): void {
-        $driver = DB::connection()->getAttribute(\PDO::ATTR_DRIVER_NAME);
-        $sql = $driver === 'sqlite'
-            ? 'CREATE TABLE IF NOT EXISTS `migrations` (`id` INTEGER PRIMARY KEY AUTOINCREMENT, `migration` VARCHAR(255) NOT NULL UNIQUE, `batch` INTEGER NOT NULL, `ran_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP)'
-            : ($driver === 'pgsql'
-                ? 'CREATE TABLE IF NOT EXISTS `migrations` (`id` BIGSERIAL PRIMARY KEY, `migration` VARCHAR(255) NOT NULL UNIQUE, `batch` INTEGER NOT NULL, `ran_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP)'
-                : 'CREATE TABLE IF NOT EXISTS `migrations` (`id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, `migration` VARCHAR(255) NOT NULL UNIQUE, `batch` INT NOT NULL, `ran_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
-        DB::statement($sql);
-    }
-    private function migrate(): int {
-        $this->ensureMigrationsTable(); $ran = array_column(DB::select('SELECT migration FROM migrations'), 'migration');
-        $files = glob($this->basePath . '/database/migrations/*.php') ?: []; sort($files); $batch = (int)(DB::select('SELECT COALESCE(MAX(batch),0)+1 AS next_batch FROM migrations')[0]['next_batch'] ?? 1); $count = 0;
-        foreach ($files as $file) { $name = basename($file, '.php'); if (in_array($name, $ran, true)) continue; $migration = require $file; if (!$migration instanceof MigrationInterface) throw new \RuntimeException("Invalid migration: {$name}"); $migration->up(); DB::statement('INSERT INTO migrations (migration,batch) VALUES (?,?)', [$name,$batch]); echo "Migrated: {$name}\n"; $count++; }
-        echo $count ? "Completed {$count} migration(s).\n" : "Nothing to migrate.\n"; return 0;
-    }
-    private function migrationStatus(): int {
-        $this->ensureMigrationsTable(); $ran = array_column(DB::select('SELECT migration FROM migrations'), 'migration'); $files = glob($this->basePath . '/database/migrations/*.php') ?: []; sort($files);
-        foreach ($files as $file) { $n = basename($file,'.php'); echo (in_array($n,$ran,true) ? '[Ran]     ' : '[Pending] ') . $n . "\n"; } return 0;
-    }
-    private function rollback(int $steps): int {
-        $this->ensureMigrationsTable(); $rows = DB::select('SELECT migration,batch FROM migrations ORDER BY batch DESC,id DESC');
-        $batchGroups = []; foreach ($rows as $row) $batchGroups[(int)$row['batch']][] = $row;
-        $batches = array_slice(array_keys($batchGroups), 0, max(1,$steps));
-        foreach ($batches as $batch) foreach ($batchGroups[$batch] as $row) {
-            $file = $this->basePath . '/database/migrations/' . $row['migration'] . '.php'; if (!is_file($file)) throw new \RuntimeException('Migration file missing: ' . $row['migration']);
-            $migration = require $file; $migration->down(); DB::statement('DELETE FROM migrations WHERE migration = ?', [$row['migration']]); echo "Rolled back: {$row['migration']}\n";
-        } return 0;
-    }
-    private function resetMigrations(): int {
-        $this->ensureMigrationsTable(); $rows = DB::select('SELECT migration FROM migrations ORDER BY batch DESC,id DESC');
-        foreach ($rows as $row) { $file = $this->basePath . '/database/migrations/' . $row['migration'] . '.php'; if (!is_file($file)) continue; $migration = require $file; $migration->down(); DB::statement('DELETE FROM migrations WHERE migration = ?', [$row['migration']]); echo "Rolled back: {$row['migration']}\n"; } return 0;
+    private function migrations(): MigrationRunner
+    {
+        return new MigrationRunner($this->basePath);
     }
     private function fresh(bool $seedAfter = false): int {
         fwrite(STDOUT, "WARNING: migrate:fresh is destructive. It rolls back recorded migrations and recreates the schema. Type YES to continue: ");
         if (trim((string)fgets(STDIN)) !== 'YES') { echo "Cancelled.\n"; return 0; }
-        $this->resetMigrations();
-        $status = $this->migrate();
+        $this->migrations()->reset();
+        $status = $this->migrations()->run();
         if ($status !== 0) return $status;
         if ($seedAfter) return $this->seed(null);
         return 0;
