@@ -13,7 +13,7 @@ Copy `.env.example` to `.env`. The default database is SQLite at `database/datab
 - `{{ $value }}` templates with HTML escaping
 - Query builder, schema helpers, migrations and seeders
 - Multiple PDO connections and configurable `DB_PREFIX`
-- Authentication, password hashing, named routes, and route filters
+- Authentication, password hashing, named routes, route groups/prefixes, resource controllers, and route filters
 - Validation with redirect-back errors and old input
 - File or database sessions
 - Development-only floating debug toolbar with session inspection and redaction
@@ -30,4 +30,4 @@ php leaf db:seed
 php leaf migrate:fresh --seed
 ```
 
-`migrate:fresh` is destructive and asks for confirmation. Back up important data first. See `docs/` for environment variables, query builder, route filters (`docs/FILTERS.md`), sessions, routes, and debugging.
+`migrate:fresh` is destructive and asks for confirmation. Back up important data first. See `docs/` for environment variables, query builder and pagination (`docs/QUERY-BUILDER.md`), routing/groups/resources (`docs/ROUTING.md`), route filters (`docs/FILTERS.md`), sessions, and debugging.

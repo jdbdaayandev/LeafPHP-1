@@ -16,8 +16,8 @@ final class Kernel
             return match ($command) {
                 'list', 'help' => $this->list(),
                 'serve' => $this->serve($argv[2] ?? '127.0.0.1', (int)($argv[3] ?? 8080)),
-                'make:controller' => $this->makeClass('Controllers', $argv[2] ?? '', 'controller'),
-                'make:model' => $this->makeClass('Models', $argv[2] ?? '', 'model'),
+                'make:controller' => $this->makeClass('Controllers', $argv[2] ?? '', 'controller', in_array('--resource', array_slice($argv, 3), true) || in_array('-r', array_slice($argv, 3), true)),
+                'make:model' => $this->makeModelCommand($argv[2] ?? '', array_slice($argv, 3)),
                 'make:migration' => $this->makeMigration($argv[2] ?? ''),
                 'make:session-migration', 'make:migration:sessions' => $this->makeSessionMigration(),
                 'make:seeder' => $this->makeSeeder($argv[2] ?? ''),
@@ -34,7 +34,7 @@ final class Kernel
     }
     private function list(): int {
         echo "LeafPHP Framework v1.4.1 | Owner: JDBD\n\n";
-        echo "Commands:\n  serve [host] [port]\n  make:controller Name\n  make:model Name\n  make:migration description\n  make:session-migration\n  make:seeder Name\n  migrate\n  migrate:status\n  migrate:rollback [steps]\n  migrate:reset\n  migrate:fresh [--seed]\n  db:seed [SeederClass]\n  key:generate\n";
+        echo "Commands:\n  serve [host] [port]\n  make:controller Name [--resource]\n  make:model Name [-mcr]\n    -m, --migration  Create a migration for the model table\n    -c, --controller Create a controller\n    -r, --resource   Generate a resource controller (requires -c)\n  make:migration description\n  make:session-migration\n  make:seeder Name\n  migrate\n  migrate:status\n  migrate:rollback [steps]\n  migrate:reset\n  migrate:fresh [--seed]\n  db:seed [SeederClass]\n  key:generate\n";
         return 0;
     }
     private function serve(string $host, int $port): int {
@@ -43,16 +43,78 @@ final class Kernel
         passthru(escapeshellarg(PHP_BINARY) . ' -S ' . escapeshellarg($host . ':' . $port) . ' -t ' . escapeshellarg($this->basePath . '/public') . ' ' . escapeshellarg($this->basePath . '/system/Core/dev-router.php'), $status);
         return $status;
     }
-    private function makeClass(string $folder, string $name, string $kind): int {
+    private function makeClass(string $folder, string $name, string $kind, bool $resource = false): int {
         $this->assertName($name); $dir = $this->basePath . '/app/' . $folder; if (!is_dir($dir)) mkdir($dir, 0775, true);
         $namespace = 'App\\' . $folder; $file = $dir . '/' . $name . '.php';
         if (is_file($file)) throw new \RuntimeException("File already exists: {$file}");
-        $body = $kind === 'controller'
-            ? "<?php\ndeclare(strict_types=1);\n\nnamespace {$namespace};\n\nclass {$name}\n{\n    public function index(): string\n    {\n        return view('home', ['title' => '{$name}']);\n    }\n}\n"
-            : "<?php\ndeclare(strict_types=1);\n\nnamespace {$namespace};\n\nclass {$name} extends Model\n{\n    protected string \$table = '" . strtolower(preg_replace('/(?<!^)[A-Z]/', '_$0', preg_replace('/Model$/', '', $name))) . "';\n}\n";
+        if ($kind === 'controller' && $resource) {
+            $body = "<?php\ndeclare(strict_types=1);\n\nnamespace {$namespace};\n\n/** Resource controller for {$name}. Implement application-specific persistence and views. */\nclass {$name}\n{\n    public function index(): mixed { return []; }\n    public function create(): mixed { return ''; }\n    public function store(): mixed { return []; }\n    public function show(string|int \$id): mixed { return []; }\n    public function edit(string|int \$id): mixed { return ''; }\n    public function update(string|int \$id): mixed { return []; }\n    public function destroy(string|int \$id): mixed { return []; }\n}\n";
+        } else {
+            $body = $kind === 'controller'
+                ? "<?php\ndeclare(strict_types=1);\n\nnamespace {$namespace};\n\nclass {$name}\n{\n    public function index(): string\n    {\n        return view('home', ['title' => '{$name}']);\n    }\n}\n"
+                : "<?php\ndeclare(strict_types=1);\n\nnamespace {$namespace};\n\nclass {$name} extends Model\n{\n    protected string \$table = '" . strtolower(preg_replace('/(?<!^)[A-Z]/', '_$0', preg_replace('/Model$/', '', $name))) . "';\n}\n";
+        }
         if ($kind === 'model') $body = str_replace("namespace {$namespace};", "namespace {$namespace};\n\nuse App\\Models\\Model;", $body);
         file_put_contents($file, $body); echo "Created {$file}\n"; return 0;
     }
+    /** Generate a model and optional migration/controller using Laravel-style combined flags. */
+    private function makeModelCommand(string $name, array $options): int
+    {
+        $this->assertName($name);
+        $flags = ['migration' => false, 'controller' => false, 'resource' => false];
+        foreach ($options as $option) {
+            if (str_starts_with($option, '--')) {
+                $key = substr($option, 2);
+                if ($key === 'migration') $flags['migration'] = true;
+                elseif ($key === 'controller') $flags['controller'] = true;
+                elseif ($key === 'resource') { $flags['controller'] = true; $flags['resource'] = true; }
+                else throw new \InvalidArgumentException("Unknown make:model option: {$option}");
+                continue;
+            }
+            if (str_starts_with($option, '-') && $option !== '-') {
+                foreach (str_split(substr($option, 1)) as $flag) {
+                    if ($flag === 'm') $flags['migration'] = true;
+                    elseif ($flag === 'c') $flags['controller'] = true;
+                    elseif ($flag === 'r') { $flags['controller'] = true; $flags['resource'] = true; }
+                    else throw new \InvalidArgumentException("Unknown make:model flag: -{$flag}");
+                }
+            } else {
+                throw new \InvalidArgumentException("Unexpected make:model argument: {$option}");
+            }
+        }
+
+        $results = [];
+        $modelPath = $this->basePath . '/app/Models/' . $name . '.php';
+        $migrationName = 'create_' . strtolower(preg_replace('/(?<!^)[A-Z]/', '_$0', preg_replace('/Model$/', '', $name))) . '_table';
+        $migrationPath = null;
+        if ($flags['migration']) {
+            $migrationDir = $this->basePath . '/database/migrations';
+            if (!is_dir($migrationDir)) mkdir($migrationDir, 0775, true);
+            $migrationPath = $migrationDir . '/' . date('Y_m_d_His') . '_' . $migrationName . '.php';
+        }
+        $controllerName = preg_replace('/Model$/', '', $name) . 'Controller';
+        $controllerPath = $this->basePath . '/app/Controllers/' . $controllerName . '.php';
+        $targets = [$modelPath];
+        if ($migrationPath !== null) $targets[] = $migrationPath;
+        if ($flags['controller']) $targets[] = $controllerPath;
+        foreach ($targets as $target) if (is_file($target)) throw new \RuntimeException("File already exists: {$target}");
+
+        $this->makeClass('Models', $name, 'model');
+        if ($migrationPath !== null) {
+            // Use the framework's normal migration generator, then report the generated file.
+            $this->makeMigration($migrationName);
+        }
+        if ($flags['controller']) $this->makeClass('Controllers', $controllerName, 'controller', $flags['resource']);
+        if ($flags['resource']) {
+            $resourceName = strtolower(preg_replace('/(?<!^)[A-Z]/', '-$0', preg_replace('/Model$/', '', $name)));
+            if (preg_match('/[^-]y$/', $resourceName)) $resourceName = substr($resourceName, 0, -1) . 'ies';
+            elseif (preg_match('/(s|x|ch|sh)$/', $resourceName)) $resourceName .= 'es';
+            else $resourceName .= 's';
+            echo "Register routes in routes/web.php: Router::resource('{$resourceName}', App\\Controllers\\{$controllerName}::class);\n";
+        }
+        return 0;
+    }
+
     private function makeMigration(string $name): int {
         $name = strtolower(trim($name)); $name = preg_replace('/[^a-z0-9_]+/', '_', $name);
         if ($name === '') throw new \InvalidArgumentException('Provide a migration name.');
