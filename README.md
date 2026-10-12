@@ -11,7 +11,7 @@ Copy `.env.example` to `.env`. The default database is SQLite at `database/datab
 ## Highlights
 
 - `{{ $value }}` templates with HTML escaping
-- Query builder, schema helpers, clean timestamped migrations and seeders
+- Query builder, schema helpers, migrations and seeders
 - Multiple PDO connections and configurable `DB_PREFIX`
 - Authentication, password hashing, named routes, and route filters
 - Validation with redirect-back errors and old input
