@@ -1,0 +1,3 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Application exception · LeafPHP</title><link rel="stylesheet" href="{{ asset('css/app.css') }}"></head>
+<body class="debug-body"><main class="debug-shell"><p class="eyebrow">LEAFPHP · DEVELOPMENT EXCEPTION</p><h1>{{ $exception }}</h1><p class="debug-message">{{ $message }}</p><section class="debug-card"><h2>Location</h2><p><code>{{ $file }}</code> · line {{ $line }}</p><p class="muted">Reference: {{ $errorId }}</p></section><section class="debug-card"><h2>Stack trace</h2><pre>{{ $trace }}</pre></section><p class="muted">Detailed diagnostics are shown only when APP_ENV is not production and APP_DEBUG=true.</p></main></body></html>

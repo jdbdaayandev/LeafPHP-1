@@ -1,0 +1,6 @@
+# LeafPHP public directory fallback. Used when Apache's document root is set to /public.
+Options -Indexes
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]

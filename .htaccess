@@ -1,0 +1,11 @@
+# LeafPHP: route requests through public/index.php without exposing /public in URLs.
+Options -Indexes
+RewriteEngine On
+
+# Deny direct HTTP access to internal framework/application directories.
+RewriteRule ^(app|system|database|bootstrap|routes|storage|vendor)(/|$) - [F,L,NC]
+RewriteRule (^|/)\.(?!well-known/) - [F,L]
+
+# Keep real public files (for example, favicon files) reachable after rewriting.
+RewriteCond %{ENV:REDIRECT_STATUS} ^$
+RewriteRule ^(.*)$ public/$1 [L]
